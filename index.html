@@ -142,24 +142,6 @@ input[type="date"].field { flex: 0 0 auto; }
   <!-- 入力 -->
   <section class="view" id="v-input">
     <div class="head"><h1>きょうの支出</h1><span class="sync" id="sync"></span></div>
-    <div class="cash" id="cashCard">
-      <div class="cash-top">
-        <div class="cash-main"><span class="label">財布の現金</span><span class="cash-val num" id="cashVal">—</span></div>
-        <div class="cash-actions">
-          <button class="btn-ghost" id="cashAdd">＋入金</button>
-          <button class="btn-ghost" id="cashFix">残高を合わせる</button>
-        </div>
-      </div>
-      <div id="cashForm" hidden>
-        <div class="cash-hint" id="cashHint"></div>
-        <div class="row">
-          <input class="field num" id="cashInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="9" autocomplete="off" placeholder="金額">
-          <button class="btn" id="cashOk">OK</button>
-          <button class="btn-ghost" id="cashCancel">やめる</button>
-        </div>
-      </div>
-    </div>
-
     <div class="amount-line empty" id="amountLine"><span class="yen">¥</span><span class="val num" id="amountVal">0</span></div>
 
     <div class="label">支払い元</div>
@@ -184,6 +166,24 @@ input[type="date"].field { flex: 0 0 auto; }
 
   <!-- 集計 -->
   <section class="view" id="v-sum" hidden>
+    <div class="cash" id="cashCard">
+      <div class="cash-top">
+        <div class="cash-main"><span class="label">財布の現金</span><span class="cash-val num" id="cashVal">—</span></div>
+        <div class="cash-actions">
+          <button class="btn-ghost" id="cashAdd">＋入金</button>
+          <button class="btn-ghost" id="cashFix">残高を合わせる</button>
+        </div>
+      </div>
+      <div id="cashForm" hidden>
+        <div class="cash-hint" id="cashHint"></div>
+        <div class="row">
+          <input class="field num" id="cashInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="9" autocomplete="off" placeholder="金額">
+          <button class="btn" id="cashOk">OK</button>
+          <button class="btn-ghost" id="cashCancel">やめる</button>
+        </div>
+      </div>
+    </div>
+
     <div class="month-nav">
       <button id="prevM" aria-label="前の月">‹</button>
       <span class="m" id="monthLabel"></span>
