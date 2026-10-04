@@ -68,6 +68,9 @@ h1 { font-size: 13px; font-weight: 500; letter-spacing: .12em; color: var(--mute
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { padding: 10px 16px; border-radius: 999px; background: var(--surface); border: 1.5px solid var(--line); font-weight: 500; }
 .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.chips.cat .chip { padding: 8px 14px; font-size: 14px; }
+.chips.cat .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.label .opt { letter-spacing: 0; margin-left: 4px; }
 .row { display: flex; gap: 8px; align-items: center; }
 .row > * { min-width: 0; }
 .field { flex: 1; background: var(--surface); border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; color: var(--ink); -webkit-user-select: text; user-select: text; }
@@ -147,6 +150,9 @@ input[type="date"].field { flex: 0 0 auto; }
     <div class="label">支払い元</div>
     <div class="chips" id="srcChips"></div>
 
+    <div class="label">勘定科目<span class="opt">（任意・もう一度押すと解除）</span></div>
+    <div class="chips cat" id="catChips"></div>
+
     <div class="row">
       <input class="field" id="memo" type="text" placeholder="メモ（任意）" maxlength="40" autocomplete="off">
       <input class="field" id="date" type="date">
@@ -196,6 +202,8 @@ input[type="date"].field { flex: 0 0 auto; }
     </div>
     <div class="label">支払い元ごと</div>
     <div class="card" id="bySource"></div>
+    <div class="label">勘定科目ごと</div>
+    <div class="card" id="byCat"></div>
     <div class="label">明細</div>
     <div id="dayList"></div>
   </section>
@@ -208,7 +216,14 @@ input[type="date"].field { flex: 0 0 auto; }
       <button class="btn" id="addSrc">追加</button>
     </div>
     <div class="card" id="srcList"></div>
-    <p class="note">支払い元を消しても、それで記録した過去の明細は残ります。</p>
+
+    <h1>勘定科目の管理</h1>
+    <div class="row">
+      <input class="field" id="newCat" type="text" placeholder="例：食費" maxlength="20" autocomplete="off">
+      <button class="btn" id="addCat">追加</button>
+    </div>
+    <div class="card" id="catList"></div>
+    <p class="note">支払い元や勘定科目を消しても、それで記録した過去の明細は残ります。</p>
 
     <h1>バックアップ</h1>
     <p class="note">記録はこのiPhoneの中だけに保存されます。機種変更や万一に備えて、ときどきバックアップを「ファイル」アプリに保存してください。</p>
@@ -250,10 +265,13 @@ input[type="date"].field { flex: 0 0 auto; }
   const LS = "okane-v1";
   let state = { sources: ["現金"], months: {}, cash: null };   // months: { "m-2026-10": [entry, ...] }, cash: { base, ts }
   try { const s = JSON.parse(localStorage.getItem(LS)); if (s && s.sources) state = s; } catch {}
+  const DEFAULT_CATS = ["食費", "外食", "日用品", "交通費", "交際費", "趣味・娯楽", "衣服・美容", "医療費", "水道光熱費", "通信費", "その他"];
+  if (!Array.isArray(state.cats)) state.cats = DEFAULT_CATS.slice();
   const cache = () => { try { localStorage.setItem(LS, JSON.stringify(state)); } catch {} };
 
   let amount = "";
   let selSrc = state.sources[0] || "";
+  let selCat = "";
   let viewMonth = ymd(new Date()).slice(0, 7);
   $("date").value = ymd(new Date());
 
@@ -299,7 +317,7 @@ input[type="date"].field { flex: 0 0 auto; }
 
   function itemHTML(e) {
     return `<div class="item"><span class="src">${esc(e.src)}</span>
-      <span class="memo">${esc(e.memo || "")}</span>
+      <span class="memo">${esc([e.cat, e.memo].filter(Boolean).join(" · "))}</span>
       <span class="amt num">${yen(e.amt)}</span>
       <button class="del" data-id="${esc(e.id)}" data-date="${esc(e.date)}" aria-label="削除">×</button></div>`;
   }
@@ -322,6 +340,11 @@ input[type="date"].field { flex: 0 0 auto; }
       ? state.sources.map((s) => `<button class="chip" aria-pressed="${s === selSrc}" data-s="${esc(s)}">${esc(s)}</button>`).join("")
       : `<span class="note">設定タブで支払い元を追加してください</span>`;
     $("srcChips").querySelectorAll(".chip").forEach((c) => c.onclick = () => { selSrc = c.dataset.s; renderChips(); renderAmount(); });
+    if (selCat && !state.cats.includes(selCat)) selCat = "";
+    $("catChips").innerHTML = state.cats.length
+      ? state.cats.map((s) => `<button class="chip" aria-pressed="${s === selCat}" data-s="${esc(s)}">${esc(s)}</button>`).join("")
+      : `<span class="note">設定タブで勘定科目を追加できます</span>`;
+    $("catChips").querySelectorAll(".chip").forEach((c) => c.onclick = () => { selCat = selCat === c.dataset.s ? "" : c.dataset.s; renderChips(); });
   }
   function renderToday() {
     const d = $("date").value || ymd(new Date());
@@ -339,14 +362,18 @@ input[type="date"].field { flex: 0 0 auto; }
     $("monthTotal").textContent = yen(total);
     $("monthSub").textContent = list.length ? `${list.length}件 ・ 1日平均 ${yen(Math.round(total / new Date(y, m, 0).getDate()))}` : "この月の記録はありません";
 
-    const by = {};
-    list.forEach((e) => { by[e.src] = (by[e.src] || 0) + e.amt; });
-    const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
-    $("bySource").innerHTML = rows.length ? rows.map(([s, v]) => {
-      const p = total ? Math.round((v / total) * 100) : 0;
-      return `<div class="bar-row"><span>${esc(s)}</span><span class="num">${yen(v)}<span class="pct">${p}%</span></span>
-        <div class="track"><div class="fill" style="width:${p}%"></div></div></div>`;
-    }).join("") : `<div class="empty-note">—</div>`;
+    const bars = (keyOf) => {
+      const by = {};
+      list.forEach((e) => { const k = keyOf(e); by[k] = (by[k] || 0) + e.amt; });
+      const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
+      return rows.length ? rows.map(([s, v]) => {
+        const p = total ? Math.round((v / total) * 100) : 0;
+        return `<div class="bar-row"><span>${esc(s)}</span><span class="num">${yen(v)}<span class="pct">${p}%</span></span>
+          <div class="track"><div class="fill" style="width:${p}%"></div></div></div>`;
+      }).join("") : `<div class="empty-note">—</div>`;
+    };
+    $("bySource").innerHTML = bars((e) => e.src);
+    $("byCat").innerHTML = bars((e) => e.cat || "未分類");
 
     const byDay = {};
     list.forEach((e) => { (byDay[e.date] = byDay[e.date] || []).push(e); });
@@ -371,6 +398,17 @@ input[type="date"].field { flex: 0 0 auto; }
       showToast(`「${removed}」を削除しました`, () => { state.sources = [...state.sources, removed]; persist("settings"); renderAll(); });
     });
   }
+  function renderCatSettings() {
+    $("catList").innerHTML = state.cats.length ? state.cats.map((s, i) =>
+      `<div class="src-item"><span>${esc(s)}</span><button class="btn-ghost" data-i="${i}">削除</button></div>`).join("")
+      : `<div class="empty-note">勘定科目がありません</div>`;
+    $("catList").querySelectorAll(".btn-ghost").forEach((b) => b.onclick = () => {
+      const removed = state.cats[+b.dataset.i];
+      state.cats = state.cats.filter((_, i) => i !== +b.dataset.i);
+      persist("settings"); renderAll();
+      showToast(`「${removed}」を削除しました`, () => { state.cats = [...state.cats, removed]; persist("settings"); renderAll(); });
+    });
+  }
   function renderCash() {
     const b = cashBalance();
     const v = $("cashVal");
@@ -380,7 +418,7 @@ input[type="date"].field { flex: 0 0 auto; }
     $("cashAdd").hidden = b === null;
     $("cashFix").textContent = b === null ? "残高を設定" : "残高を合わせる";
   }
-  function renderAll() { renderCash(); renderAmount(); renderChips(); renderToday(); renderSum(); renderSettings(); }
+  function renderAll() { renderCash(); renderAmount(); renderChips(); renderToday(); renderSum(); renderSettings(); renderCatSettings(); }
 
   // ---- events ----
   $("keypad").addEventListener("click", (ev) => {
@@ -393,10 +431,10 @@ input[type="date"].field { flex: 0 0 auto; }
   $("saveBtn").onclick = () => {
     const amt = parseInt(amount, 10);
     if (!amt || !selSrc) return;
-    const e = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), amt, src: selSrc,
+    const e = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), amt, src: selSrc, cat: selCat,
       date: $("date").value || ymd(new Date()), memo: $("memo").value.trim(), ts: Date.now() };
     addEntry(e);
-    amount = ""; $("memo").value = ""; renderAmount();
+    amount = ""; $("memo").value = ""; selCat = ""; renderAmount(); renderChips();
     const bal = e.src === CASH ? cashBalance() : null;
     showToast(`${e.src}で ${yen(amt)} を記録しました` + (bal !== null ? `（残り ${yen(bal)}）` : ""), () => removeEntryQuiet(e));
   };
@@ -441,6 +479,15 @@ input[type="date"].field { flex: 0 0 auto; }
     persist("settings"); renderAll();
   };
   $("addSrc").onclick = addSource;
+  const addCat = () => {
+    const v = $("newCat").value.trim();
+    if (!v) return;
+    if (state.cats.includes(v)) { showToast("同じ名前の勘定科目があります"); return; }
+    state.cats = [...state.cats, v]; $("newCat").value = "";
+    persist("settings"); renderAll();
+  };
+  $("addCat").onclick = addCat;
+  $("newCat").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) addCat(); });
   $("newSrc").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) addSource(); });
 
   document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
@@ -472,7 +519,7 @@ input[type="date"].field { flex: 0 0 auto; }
       const d = JSON.parse(await f.text());
       if (!d || !Array.isArray(d.sources) || typeof d.months !== "object") throw 0;
       const n = Object.values(d.months).flat().length;
-      pending = { sources: d.sources, months: d.months, cash: d.cash || null };
+      pending = { sources: d.sources, cats: Array.isArray(d.cats) ? d.cats : DEFAULT_CATS.slice(), months: d.months, cash: d.cash || null };
       $("importMsg").textContent = `${n}件の記録が入ったバックアップです。いまのデータは置き換わります。`;
       $("importConfirm").hidden = false;
     } catch { showToast("このファイルは家計簿のバックアップではないようです"); }
