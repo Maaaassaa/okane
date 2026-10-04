@@ -130,6 +130,25 @@ input[type="date"].field { flex: 0 0 auto; }
 .tab svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tab[aria-selected="true"] { color: var(--accent); font-weight: 700; }
 
+/* 絞り込みとグラフ */
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--key); border-radius: 10px; padding: 3px; gap: 3px; }
+.seg button { padding: 8px 0; border-radius: 8px; font-size: 14px; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 700; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.chips.filter .chip { padding: 7px 12px; font-size: 13px; }
+.chart-card { background: var(--surface); border-radius: 14px; padding: 14px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+.chart-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.chart-head .seg { grid-template-columns: repeat(2, auto); }
+.chart-head .seg button { padding: 6px 12px; font-size: 13px; }
+.readout { font-size: 13px; color: var(--muted); min-height: 1.4em; }
+.readout b { color: var(--ink); font-family: var(--font-num); font-weight: 600; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis-t { fill: var(--muted); font-size: 9px; font-family: var(--font-num); }
+.chart .bar { fill: var(--accent); }
+.chart.has-sel .bar { opacity: .4; }
+.chart.has-sel .bar.sel { opacity: 1; }
+.chart .hit { fill: transparent; cursor: pointer; }
+
 /* 編集シート */
 .item[data-id] { cursor: pointer; }
 .item[data-id]:active { opacity: .6; }
@@ -213,8 +232,25 @@ input[type="date"].field { flex: 0 0 auto; }
       <span class="m" id="monthLabel"></span>
       <button id="nextM" aria-label="次の月">›</button>
     </div>
+    <div class="seg" id="fType">
+      <button data-t="all" aria-pressed="true">すべて</button>
+      <button data-t="src" aria-pressed="false">支払い元</button>
+      <button data-t="cat" aria-pressed="false">勘定科目</button>
+    </div>
+    <div class="chips filter" id="fVals" hidden></div>
+    <div class="chart-card">
+      <div class="chart-head">
+        <span class="label" id="chartTitle">日ごとの支出</span>
+        <div class="seg" id="chartMode">
+          <button data-m="day" aria-pressed="true">日別</button>
+          <button data-m="month" aria-pressed="false">月別</button>
+        </div>
+      </div>
+      <div class="readout" id="readout">棒をタップすると金額が出ます</div>
+      <div class="chart" id="chart"></div>
+    </div>
     <div class="total">
-      <span class="label">この月の合計</span>
+      <span class="label" id="totalLabel">この月の合計</span>
       <span class="big num" id="monthTotal">¥0</span>
       <span class="sub" id="monthSub"></span>
     </div>
@@ -439,10 +475,96 @@ input[type="date"].field { flex: 0 0 auto; }
     $("todayList").innerHTML = list.length ? list.map((e) => itemHTML(e)).join("") : `<div class="empty-note">まだ記録がありません</div>`;
     bindDeletes($("todayList"));
   }
+  // ---- 絞り込み ----
+  let fType = "all", fVal = "", chartMode = "day", chartSel = -1;
+  const matchFilter = (e) => fType === "all" || (fType === "src" ? e.src === fVal : (e.cat || "未分類") === fVal);
+  function filterOptions() {
+    const used = allEntries().map((e) => fType === "src" ? e.src : (e.cat || "未分類"));
+    const base = fType === "src" ? state.sources : [...state.cats, "未分類"];
+    return [...base, ...used.filter((v, i, a) => !base.includes(v) && a.indexOf(v) === i)];
+  }
+  function renderFilter() {
+    $("fType").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.t === fType));
+    if (fType === "all") { $("fVals").hidden = true; return; }
+    const opts = filterOptions();
+    if (!opts.includes(fVal)) fVal = opts[0] || "";
+    $("fVals").hidden = false;
+    $("fVals").innerHTML = opts.map((o) => `<button class="chip" aria-pressed="${o === fVal}" data-v="${esc(o)}">${esc(o)}</button>`).join("");
+    $("fVals").querySelectorAll(".chip").forEach((c) => c.onclick = () => { fVal = c.dataset.v; chartSel = -1; renderSum(); });
+  }
+  $("fType").querySelectorAll("button").forEach((b) => b.onclick = () => { fType = b.dataset.t; fVal = ""; chartSel = -1; renderSum(); });
+  $("chartMode").querySelectorAll("button").forEach((b) => b.onclick = () => { chartMode = b.dataset.m; chartSel = -1; renderSum(); });
+
+  // ---- 縦棒グラフ ----
+  const shortYen = (v) => v >= 10000 ? (v / 10000).toLocaleString("ja-JP", { maximumFractionDigits: 1 }) + "万" : v.toLocaleString("ja-JP");
+  function niceStep(max) {
+    const raw = max / 3, p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const f = raw / p;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+  }
+  function chartData() {
+    const [y, m] = viewMonth.split("-").map(Number);
+    if (chartMode === "day") {
+      const n = new Date(y, m, 0).getDate();
+      const vals = Array(n).fill(0);
+      entriesOf(viewMonth).filter(matchFilter).forEach((e) => { vals[+e.date.slice(8, 10) - 1] += e.amt; });
+      return vals.map((v, i) => ({ v, label: String(i + 1), tick: [0, 4, 9, 14, 19, 24].includes(i) || i === n - 1, name: `${m}/${i + 1}（${WD[new Date(y, m - 1, i + 1).getDay()]}）` }));
+    }
+    const out = [];
+    for (let k = 11; k >= 0; k--) {
+      const d = new Date(y, m - 1 - k, 1);
+      const ym = ymd(d).slice(0, 7);
+      out.push({ v: entriesOf(ym).filter(matchFilter).reduce((s, e) => s + e.amt, 0), label: (d.getMonth() + 1) + "月", tick: true, name: `${d.getFullYear()}年${d.getMonth() + 1}月` });
+    }
+    return out;
+  }
+  function renderChart() {
+    $("chartMode").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.m === chartMode));
+    const what = fType === "all" ? "" : `${fVal}・`;
+    $("chartTitle").textContent = chartMode === "day" ? `${what}日ごとの支出` : `${what}月ごとの支出（12か月）`;
+    const data = chartData();
+    const W = 340, H = 170, L = 34, R = 4, T = 8, B = 18;
+    const max = Math.max(...data.map((d) => d.v));
+    const step = max > 0 ? niceStep(max) : 1000;
+    const top = max > 0 ? Math.ceil(max / step) * step : step * 3;
+    const yOf = (v) => T + (H - T - B) * (1 - v / top);
+    const slot = (W - L - R) / data.length;
+    const bw = Math.max(2, Math.min(slot - 2, chartMode === "day" ? 8 : 16));
+    let g = "";
+    for (let v = 0; v <= top + 0.5; v += step) {
+      const yy = yOf(v).toFixed(1);
+      g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/><text class="axis-t" x="${L - 5}" y="${yy}" dy="3" text-anchor="end">${shortYen(v)}</text>`;
+    }
+    data.forEach((d, i) => {
+      const cx = L + slot * i + slot / 2;
+      if (d.v > 0) {
+        const y0 = yOf(0), y1 = yOf(d.v), h = y0 - y1, r = Math.min(3, bw / 2, h);
+        // 上だけ角を丸めた棒（下は基準線にそろえる）
+        g += `<path class="bar${i === chartSel ? " sel" : ""}" d="M${cx - bw / 2},${y0} V${y1 + r} Q${cx - bw / 2},${y1} ${cx - bw / 2 + r},${y1} H${cx + bw / 2 - r} Q${cx + bw / 2},${y1} ${cx + bw / 2},${y1 + r} V${y0} Z"/>`;
+      }
+      if (d.tick) g += `<text class="axis-t" x="${cx}" y="${H - 4}" text-anchor="middle">${d.label}</text>`;
+      g += `<rect class="hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${H - T}"><title>${esc(d.name)} ${yen(d.v)}</title></rect>`;
+    });
+    const sum = data.reduce((s, d) => s + d.v, 0);
+    $("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc($("chartTitle").textContent)}">${g}</svg>`;
+    $("chart").classList.toggle("has-sel", chartSel >= 0);
+    $("readout").innerHTML = chartSel >= 0
+      ? `${esc(data[chartSel].name)}　<b>${yen(data[chartSel].v)}</b>`
+      : sum ? `期間の合計　<b>${yen(sum)}</b>　・　棒をタップで詳細` : "この期間の記録はありません";
+    $("chart").querySelectorAll(".hit").forEach((h) => h.onclick = () => {
+      const i = +h.dataset.i;
+      chartSel = chartSel === i ? -1 : i;
+      renderChart();
+    });
+  }
+
   function renderSum() {
     const [y, m] = viewMonth.split("-").map(Number);
     $("monthLabel").textContent = `${y}年${m}月`;
-    const list = entriesOf(viewMonth);
+    renderFilter();
+    renderChart();
+    const list = entriesOf(viewMonth).filter(matchFilter);
+    $("totalLabel").textContent = fType === "all" ? "この月の合計" : `この月の合計（${fVal}）`;
     const total = list.reduce((s, e) => s + e.amt, 0);
     $("monthTotal").textContent = yen(total);
     $("monthSub").textContent = list.length ? `${list.length}件 ・ 1日平均 ${yen(Math.round(total / new Date(y, m, 0).getDate()))}` : "この月の記録はありません";
@@ -554,8 +676,8 @@ input[type="date"].field { flex: 0 0 auto; }
   $("cashCancel").onclick = () => { $("cashForm").hidden = true; };
   $("cashOk").onclick = submitCash;
   $("cashInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) submitCash(); });
-  $("prevM").onclick = () => { const [y, m] = viewMonth.split("-").map(Number); const d = new Date(y, m - 2, 1); viewMonth = ymd(d).slice(0, 7); renderSum(); };
-  $("nextM").onclick = () => { const [y, m] = viewMonth.split("-").map(Number); const d = new Date(y, m, 1); viewMonth = ymd(d).slice(0, 7); renderSum(); };
+  $("prevM").onclick = () => { const [y, m] = viewMonth.split("-").map(Number); const d = new Date(y, m - 2, 1); viewMonth = ymd(d).slice(0, 7); chartSel = -1; renderSum(); };
+  $("nextM").onclick = () => { const [y, m] = viewMonth.split("-").map(Number); const d = new Date(y, m, 1); viewMonth = ymd(d).slice(0, 7); chartSel = -1; renderSum(); };
   const addSource = () => {
     const v = $("newSrc").value.trim();
     if (!v) return;
